@@ -162,7 +162,7 @@ land before counts and summary.
   emit.
 - Notes: must come after `pnpm:root` emits so the reporter can render
   the diff block.
-- [ ] Backfill `pnpm:summary`.
+- [x] Backfill `pnpm:summary`.
 
 ### `pnpm:package-import-method` — clone / hardlink / copy decision
 

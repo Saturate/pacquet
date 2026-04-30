@@ -8,7 +8,7 @@ use pacquet_lockfile::Lockfile;
 use pacquet_network::ThrottledClient;
 use pacquet_npmrc::Npmrc;
 use pacquet_package_manifest::{DependencyGroup, PackageManifest};
-use pacquet_reporter::{ContextLog, LogEvent, LogLevel, Reporter, Stage, StageLog};
+use pacquet_reporter::{ContextLog, LogEvent, LogLevel, Reporter, Stage, StageLog, SummaryLog};
 use pacquet_tarball::MemCache;
 
 /// This subroutine does everything `pacquet install` is supposed to do.
@@ -156,9 +156,15 @@ where
 
         R::emit(&LogEvent::Stage(StageLog {
             level: LogLevel::Debug,
-            prefix,
+            prefix: prefix.clone(),
             stage: Stage::ImportingDone,
         }));
+
+        // `pnpm:summary` closes the install and lets the reporter render
+        // the accumulated `pnpm:root` events as a "+N -M" block. Must
+        // come after `importing_done`, matching pnpm's ordering at
+        // <https://github.com/pnpm/pnpm/blob/086c5e91e8/installing/deps-installer/src/install/index.ts#L1663>.
+        R::emit(&LogEvent::Summary(SummaryLog { level: LogLevel::Debug, prefix }));
 
         Ok(())
     }
@@ -561,12 +567,13 @@ mod tests {
         drop(dir);
     }
 
-    /// `Install::run` emits `pnpm:context` followed by `pnpm:stage`
-    /// `importing_started` and, on the success path, `importing_done`.
-    /// On an early-error path (e.g. `NoLockfile`) only the leading
-    /// events fire. This matches pnpm: context is emitted once
-    /// alongside the install header, and the stage pairing drives the
-    /// reporter's progress UI.
+    /// `Install::run` emits `pnpm:context`, then `pnpm:stage`
+    /// `importing_started`, then on the success path `importing_done`
+    /// followed by `pnpm:summary`. On an early-error path (e.g.
+    /// `NoLockfile`) only the leading events fire. This matches pnpm:
+    /// context is emitted once alongside the install header, the stage
+    /// pairing drives the reporter's progress UI, and summary closes
+    /// the run so the reporter can render its "+N -M" block.
     ///
     /// `pnpm:context` carries `currentLockfileExists`, `storeDir`,
     /// `virtualStoreDir`. `currentLockfileExists` is hard-coded `false`
@@ -579,7 +586,7 @@ mod tests {
     /// mutex declared in the same body. The mutex is per-test-fn, so
     /// concurrent tests don't race on it.
     #[tokio::test]
-    async fn install_emits_context_and_stage_events() {
+    async fn install_emits_pnpm_event_sequence() {
         use pacquet_reporter::ContextLog;
 
         static EVENTS: Mutex<Vec<LogEvent>> = Mutex::new(Vec::new());
@@ -635,8 +642,8 @@ mod tests {
 
         let captured = EVENTS.lock().unwrap();
 
-        // Event ordering matches pnpm: context first, then the stage
-        // bracketing pair.
+        // Event ordering matches pnpm: context, then the stage
+        // bracketing pair, then summary closing the run.
         assert!(
             matches!(
                 captured.as_slice(),
@@ -644,9 +651,21 @@ mod tests {
                     LogEvent::Context(_),
                     LogEvent::Stage(StageLog { stage: Stage::ImportingStarted, .. }),
                     LogEvent::Stage(StageLog { stage: Stage::ImportingDone, .. }),
+                    LogEvent::Summary(_),
                 ]
             ),
             "unexpected event sequence: {captured:?}",
+        );
+
+        // Summary's `prefix` must equal the manifest-parent value
+        // `Install::run` derives, since pnpm's reporter keys its
+        // accumulated root-events by prefix to render the diff.
+        let LogEvent::Summary(SummaryLog { prefix: summary_prefix, .. }) = &captured[3] else {
+            unreachable!("fourth event is summary, asserted above");
+        };
+        assert_eq!(
+            summary_prefix,
+            &manifest.path().parent().unwrap().to_string_lossy().into_owned(),
         );
 
         // Spot-check the context payload: pacquet's directories must

@@ -42,6 +42,15 @@ pub enum LogEvent {
     /// Upstream: <https://github.com/pnpm/pnpm/blob/3b12eb27de/core/core-loggers/src/stageLogger.ts>.
     #[serde(rename = "pnpm:stage")]
     Stage(StageLog),
+
+    /// End-of-install marker (`pnpm:summary`). pnpm's reporter combines
+    /// this with the accumulated `pnpm:root` events to render the final
+    /// "+N -M" block.
+    ///
+    /// Upstream: <https://github.com/pnpm/pnpm/blob/086c5e91e8/core/core-loggers/src/summaryLogger.ts>.
+    /// Emit site: <https://github.com/pnpm/pnpm/blob/086c5e91e8/installing/deps-installer/src/install/index.ts#L1663>.
+    #[serde(rename = "pnpm:summary")]
+    Summary(SummaryLog),
 }
 
 /// `pnpm:context` payload.
@@ -77,6 +86,14 @@ pub enum Stage {
     ResolutionDone,
     ImportingStarted,
     ImportingDone,
+}
+
+/// `pnpm:summary` payload. pnpm carries only the importer prefix and
+/// uses the surrounding `pnpm:root` history to render the diff.
+#[derive(Debug, Clone, Serialize)]
+pub struct SummaryLog {
+    pub level: LogLevel,
+    pub prefix: String,
 }
 
 /// Severity level on the bunyan envelope.
@@ -238,6 +255,27 @@ mod tests {
         assert_eq!(json["time"], 1_700_000_000_000_u64);
         assert_eq!(json["hostname"], "host");
         assert_eq!(json["pid"], 4242);
+    }
+
+    /// Summary log carries only `prefix`; pnpm's reporter joins this
+    /// with the `pnpm:root` history to render the diff. The wire shape
+    /// is the bunyan envelope plus `name`, `level`, `prefix`.
+    #[test]
+    fn summary_event_matches_pnpm_wire_shape() {
+        let event = LogEvent::Summary(SummaryLog {
+            level: LogLevel::Debug,
+            prefix: "/some/project".to_string(),
+        });
+        let envelope =
+            Envelope { time: 1_700_000_000_000, hostname: "host", pid: 4242, event: &event };
+
+        let json: Value =
+            serde_json::from_str(&serde_json::to_string(&envelope).expect("serialize envelope"))
+                .expect("parse JSON");
+
+        assert_eq!(json["name"], "pnpm:summary");
+        assert_eq!(json["level"], "debug");
+        assert_eq!(json["prefix"], "/some/project");
     }
 
     /// Phase markers serialize as the snake_case strings pnpm uses.
