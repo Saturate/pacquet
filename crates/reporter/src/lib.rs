@@ -51,6 +51,15 @@ pub enum LogEvent {
     /// Emit site: <https://github.com/pnpm/pnpm/blob/086c5e91e8/installing/deps-installer/src/install/index.ts#L1663>.
     #[serde(rename = "pnpm:summary")]
     Summary(SummaryLog),
+
+    /// The import method used to materialise files from the store
+    /// (`pnpm:package-import-method`). Fires once per install when the
+    /// importer is constructed.
+    ///
+    /// Upstream: <https://github.com/pnpm/pnpm/blob/086c5e91e8/core/core-loggers/src/packageImportMethodLogger.ts>.
+    /// Emit site: <https://github.com/pnpm/pnpm/blob/086c5e91e8/fs/indexed-pkg-importer/src/index.ts#L32>.
+    #[serde(rename = "pnpm:package-import-method")]
+    PackageImportMethod(PackageImportMethodLog),
 }
 
 /// `pnpm:context` payload.
@@ -94,6 +103,28 @@ pub enum Stage {
 pub struct SummaryLog {
     pub level: LogLevel,
     pub prefix: String,
+}
+
+/// `pnpm:package-import-method` payload. The method names match pnpm's
+/// wire shape exactly — anything else would silently fail to render
+/// even though the JSON parses.
+#[derive(Debug, Clone, Serialize)]
+pub struct PackageImportMethodLog {
+    pub level: LogLevel,
+    pub method: PackageImportMethod,
+}
+
+/// Wire-format import method. pnpm only knows three values; the
+/// pacquet config enum has more (`Auto`, `CloneOrCopy`) which collapse
+/// to `clone` because that's the optimistic path both fall through to
+/// first. See `From<pacquet_npmrc::PackageImportMethod>` in
+/// `pacquet-package-manager` for the mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageImportMethod {
+    Clone,
+    Hardlink,
+    Copy,
 }
 
 /// Severity level on the bunyan envelope.
@@ -276,6 +307,37 @@ mod tests {
         assert_eq!(json["name"], "pnpm:summary");
         assert_eq!(json["level"], "debug");
         assert_eq!(json["prefix"], "/some/project");
+    }
+
+    /// Package-import-method log carries the chosen method as one of
+    /// pnpm's three lowercase strings. Anything else (e.g. the
+    /// camelCase `cloneOrCopy` from pacquet's config enum) would
+    /// silently fail to render.
+    #[test]
+    fn package_import_method_event_matches_pnpm_wire_shape() {
+        let event = LogEvent::PackageImportMethod(PackageImportMethodLog {
+            level: LogLevel::Debug,
+            method: PackageImportMethod::Clone,
+        });
+        let envelope =
+            Envelope { time: 1_700_000_000_000, hostname: "host", pid: 4242, event: &event };
+
+        let json: Value =
+            serde_json::from_str(&serde_json::to_string(&envelope).expect("serialize envelope"))
+                .expect("parse JSON");
+
+        assert_eq!(json["name"], "pnpm:package-import-method");
+        assert_eq!(json["level"], "debug");
+        assert_eq!(json["method"], "clone");
+
+        for (method, expected) in [
+            (PackageImportMethod::Clone, "clone"),
+            (PackageImportMethod::Hardlink, "hardlink"),
+            (PackageImportMethod::Copy, "copy"),
+        ] {
+            let json = serde_json::to_string(&method).expect("serialize method");
+            assert_eq!(json, format!("\"{expected}\""), "method {expected}");
+        }
     }
 
     /// Phase markers serialize as the snake_case strings pnpm uses.

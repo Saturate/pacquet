@@ -98,7 +98,7 @@ land before counts and summary.
 - [ ] Backfill `pnpm:progress` (`resolved`, `fetched`, `found_in_store`,
   `imported`).
 
-### `pnpm:stage` — `resolution_started` / `resolution_done`
+### `pnpm:stage` — `resolution_started` / `resolution_done` *(deferred)*
 
 - Upstream type:
   [`core/core-loggers/src/stageLogger.ts`](https://github.com/pnpm/pnpm/blob/086c5e91e8/core/core-loggers/src/stageLogger.ts).
@@ -108,13 +108,22 @@ land before counts and summary.
     [`installing/deps-installer/src/install/index.ts:1232`](https://github.com/pnpm/pnpm/blob/086c5e91e8/installing/deps-installer/src/install/index.ts#L1232).
   - `resolution_done` —
     [`installing/deps-installer/src/install/index.ts:1375`](https://github.com/pnpm/pnpm/blob/086c5e91e8/installing/deps-installer/src/install/index.ts#L1375).
-- Pacquet target: `crates/package-manager/src/install_without_lockfile.rs`
-  brackets resolution; the frozen-lockfile path skips this stage by
-  design (the lockfile *is* the resolution).
-- Notes: emit only when resolution actually runs. `--frozen-lockfile`
-  installs proceed straight from `importing_started` → `importing_done`,
-  matching pnpm.
-- [ ] Backfill `pnpm:stage` `resolution_started` / `resolution_done`.
+- Pacquet target: would live in
+  `crates/package-manager/src/install_without_lockfile.rs`. Deferred —
+  pacquet's no-lockfile path interleaves resolution and import per
+  dependency (each `async move` block fetches metadata, downloads, and
+  links in one pass), so there is no clean phase boundary to bracket.
+  Emitting `resolution_done` after import work has already happened
+  would interleave with `pnpm:progress fetched/imported` events for
+  individual packages and confuse the reporter's per-package state.
+  Frozen-lockfile installs (pacquet's primary path today) don't need
+  these events — pnpm itself skips them in `deps-restorer`, where the
+  lockfile *is* the resolution.
+- Pick this back up once pacquet's no-lockfile flow gains a separate
+  resolution pass (resolve every dependency first, then import). Until
+  then, `pnpm:stage` is `importing_started` / `importing_done` only.
+- [ ] Backfill `pnpm:stage` `resolution_started` / `resolution_done`
+  *(blocked on phase-separated resolution)*.
 
 ### `pnpm:context` — install start metadata
 
@@ -181,7 +190,7 @@ land before counts and summary.
   — emit `clone` for `Reflink` (it's the closest concept upstream
   understands) and add a TODO so we revisit if upstream gains a `reflink`
   variant.
-- [ ] Backfill `pnpm:package-import-method`.
+- [x] Backfill `pnpm:package-import-method`.
 
 ### `pnpm:request-retry` — HTTP retry events
 
