@@ -28,11 +28,34 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "name")]
 pub enum LogEvent {
+    /// Install context: store directory, virtual-store directory, and
+    /// whether a current lockfile (`node_modules/.pnpm/lock.yaml`) was
+    /// loaded (`pnpm:context`).
+    ///
+    /// Upstream: <https://github.com/pnpm/pnpm/blob/086c5e91e8/core/core-loggers/src/contextLogger.ts>.
+    /// Emit site: <https://github.com/pnpm/pnpm/blob/086c5e91e8/installing/context/src/index.ts#L196>.
+    #[serde(rename = "pnpm:context")]
+    Context(ContextLog),
+
     /// Coarse install-pipeline phase markers (`pnpm:stage`).
     ///
     /// Upstream: <https://github.com/pnpm/pnpm/blob/3b12eb27de/core/core-loggers/src/stageLogger.ts>.
     #[serde(rename = "pnpm:stage")]
     Stage(StageLog),
+}
+
+/// `pnpm:context` payload.
+///
+/// Emitted once per install when the install context has been
+/// constructed. Field names match pnpm's wire shape (camelCase) so
+/// `@pnpm/cli.default-reporter` accepts the record unchanged.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextLog {
+    pub level: LogLevel,
+    pub current_lockfile_exists: bool,
+    pub store_dir: String,
+    pub virtual_store_dir: String,
 }
 
 /// `pnpm:stage` payload.
@@ -163,6 +186,32 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
+
+    /// Context log serializes with the camelCase field names
+    /// `@pnpm/cli.default-reporter` expects (`currentLockfileExists`,
+    /// `storeDir`, `virtualStoreDir`) — snake_case names would silently
+    /// fail to render even though the JSON is structurally valid.
+    #[test]
+    fn context_event_matches_pnpm_wire_shape() {
+        let event = LogEvent::Context(ContextLog {
+            level: LogLevel::Debug,
+            current_lockfile_exists: false,
+            store_dir: "/store".to_string(),
+            virtual_store_dir: "/proj/node_modules/.pacquet".to_string(),
+        });
+        let envelope =
+            Envelope { time: 1_700_000_000_000, hostname: "host", pid: 4242, event: &event };
+
+        let json: Value =
+            serde_json::from_str(&serde_json::to_string(&envelope).expect("serialize envelope"))
+                .expect("parse JSON");
+
+        assert_eq!(json["name"], "pnpm:context");
+        assert_eq!(json["level"], "debug");
+        assert_eq!(json["currentLockfileExists"], false);
+        assert_eq!(json["storeDir"], "/store");
+        assert_eq!(json["virtualStoreDir"], "/proj/node_modules/.pacquet");
+    }
 
     /// Stage log serializes with the channel name flattened into the
     /// envelope alongside `time`, `hostname`, `pid`, and the payload

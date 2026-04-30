@@ -129,7 +129,7 @@ land before counts and summary.
 - Notes: `currentLockfileExists` should reflect
   `node_modules/.pnpm/lock.yaml` once that's being read/written; until
   then, hard-code `false` and add a TODO so the emit doesn't go stale.
-- [ ] Backfill `pnpm:context`.
+- [x] Backfill `pnpm:context`.
 
 ### `pnpm:stats` — added / removed counts
 
